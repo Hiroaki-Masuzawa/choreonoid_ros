@@ -251,7 +251,6 @@ void BodyROSItem::createSensors(BodyPtr body)
     for (RangeCameraPtr sensor : rangeVisionSensors_) {
         std::string name = sensor->name();
         std::replace(name.begin(), name.end(), '-', '_');
-        ROS_INFO("RangeCamera Publisher %s", sensor->isOrganized()?"ture":"false");
         if (sensor->isOrganized()) {
             const image_transport::CameraPublisher publisher 
                 = it.advertiseCamera(name + "/depth/image_raw", 1);
@@ -259,7 +258,6 @@ void BodyROSItem::createSensors(BodyPtr body)
                 updateRangeVisionSensor_depthimage(sensor, publisher);
             });
             rangeVisionSensorPublishers_depthimage.push_back(publisher);
-            ROS_INFO("Make Depthimage Publisher");
         }else{
             const ros::Publisher publisher =
                 rosNode->advertise<sensor_msgs::PointCloud2>(name + "/point_cloud", 1);
@@ -267,7 +265,6 @@ void BodyROSItem::createSensors(BodyPtr body)
                 updateRangeVisionSensor(sensor, publisher);
             });
             rangeVisionSensorPublishers_pointcloud.push_back(publisher);
-            ROS_INFO("Make Pointcloud Publisher");
         }
         // adds a server only for the camera whose type is COLOR_DEPTH or POINT_CLOUD.
         // Without this exception, a new service server may be a duplicate
