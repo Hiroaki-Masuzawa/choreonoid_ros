@@ -224,35 +224,51 @@ void BodyROSItem::createSensors(BodyPtr body)
     visionSensorSwitchServers.clear();
     visionSensorSwitchServers.reserve(visionSensors_.size());
     for (CameraPtr sensor : visionSensors_) {
-        std::string name = sensor->name();
-        std::replace(name.begin(), name.end(), '-', '_');
-        const image_transport::Publisher publisher
-            = it.advertise(name + "/image_raw", 1);
-        sensor->sigStateChanged().connect([this, sensor, publisher]() {
-            updateVisionSensor(sensor, publisher);
-        });
-        visionSensorPublishers.push_back(publisher);
-        boost::function<bool (std_srvs::SetBoolRequest&, std_srvs::SetBoolResponse&)> requestCallback
-            = boost::bind(&BodyROSItem::switchDevice, this, _1, _2, sensor);
-        visionSensorSwitchServers.push_back(
-            rosNode->advertiseService(name + "/set_enabled", requestCallback));
-        ROS_INFO("Create RGB camera %s (%f Hz)",
-                 sensor->name().c_str(), sensor->frameRate());
+        if (sensor->imageType() == cnoid::Camera::COLOR_IMAGE) {
+            std::string name = sensor->name();
+            std::replace(name.begin(), name.end(), '-', '_');
+            const image_transport::Publisher publisher
+                = it.advertise(name + "/color/image_raw", 1);
+            sensor->sigStateChanged().connect([this, sensor, publisher]() {
+                updateVisionSensor(sensor, publisher);
+            });
+            visionSensorPublishers.push_back(publisher);
+            boost::function<bool (std_srvs::SetBoolRequest&, std_srvs::SetBoolResponse&)> requestCallback
+                = boost::bind(&BodyROSItem::switchDevice, this, _1, _2, sensor);
+            visionSensorSwitchServers.push_back(
+                rosNode->advertiseService(name + "/set_enabled", requestCallback));
+            ROS_INFO("Create RGB camera %s (%f Hz)",
+                    sensor->name().c_str(), sensor->frameRate());
+        }
     }
     
-    rangeVisionSensorPublishers.clear();
-    rangeVisionSensorPublishers.reserve(rangeVisionSensors_.size());
+    rangeVisionSensorPublishers_pointcloud.clear();
+    rangeVisionSensorPublishers_pointcloud.reserve(rangeVisionSensors_.size());
+    rangeVisionSensorPublishers_depthimage.clear();
+    rangeVisionSensorPublishers_depthimage.reserve(rangeVisionSensors_.size());
     rangeVisionSensorSwitchServers.clear();
     rangeVisionSensorSwitchServers.reserve(rangeVisionSensors_.size());
     for (RangeCameraPtr sensor : rangeVisionSensors_) {
         std::string name = sensor->name();
         std::replace(name.begin(), name.end(), '-', '_');
-        const ros::Publisher publisher =
-            rosNode->advertise<sensor_msgs::PointCloud2>(name + "/point_cloud", 1);
-        sensor->sigStateChanged().connect([this, sensor, publisher]() {
-            updateRangeVisionSensor(sensor, publisher);
-        });
-        rangeVisionSensorPublishers.push_back(publisher);
+        ROS_INFO("RangeCamera Publisher %s", sensor->isOrganized()?"ture":"false");
+        if (sensor->isOrganized()) {
+            const image_transport::CameraPublisher publisher 
+                = it.advertiseCamera(name + "/depth/image_raw", 1);
+            sensor->sigStateChanged().connect([this, sensor, publisher]() {
+                updateRangeVisionSensor_depthimage(sensor, publisher);
+            });
+            rangeVisionSensorPublishers_depthimage.push_back(publisher);
+            ROS_INFO("Make Depthimage Publisher");
+        }else{
+            const ros::Publisher publisher =
+                rosNode->advertise<sensor_msgs::PointCloud2>(name + "/point_cloud", 1);
+            sensor->sigStateChanged().connect([this, sensor, publisher]() {
+                updateRangeVisionSensor(sensor, publisher);
+            });
+            rangeVisionSensorPublishers_pointcloud.push_back(publisher);
+            ROS_INFO("Make Pointcloud Publisher");
+        }
         // adds a server only for the camera whose type is COLOR_DEPTH or POINT_CLOUD.
         // Without this exception, a new service server may be a duplicate
         // of one added to 'visionSensorSwitchServers'.
@@ -493,6 +509,81 @@ void BodyROSItem::updateRangeVisionSensor
 }
 
 
+void BodyROSItem::updateRangeVisionSensor_depthimage
+(const RangeCameraPtr& sensor, const image_transport::CameraPublisher& publisher)
+{
+    if(!sensor->on()){
+        return;
+    }
+
+    if(publisher.getNumSubscribers()==0){
+        return;
+    }
+
+    sensor_msgs::Image vision;
+    vision.header.stamp.fromSec(io->currentTime());
+    vision.header.frame_id = sensor->name();
+    vision.height = sensor->resolutionY();
+    vision.width = sensor->resolutionX();
+    vision.encoding = sensor_msgs::image_encodings::MONO16;
+
+    vision.is_bigendian = 0;
+    vision.step = sensor->resolutionX() * 2;
+    vision.data.resize(vision.step * vision.height);
+
+    uint16_t* dst = (uint16_t*)&(vision.data[0]);
+    const std::vector<Vector3f>& points = sensor->constPoints();
+    for (int y=0;y < vision.height;y++) {
+        for (int x=0;x < vision.width;x++) {
+            int idx = y*vision.width+x;
+            float z = points[idx].z();
+            dst[idx] = (uint16_t)(z*1000);
+        }
+    }
+
+    sensor_msgs::CameraInfo info;
+    info.header.stamp = vision.header.stamp;
+    info.header.frame_id  = vision.header.frame_id ;
+    info.width = vision.width;
+    info.height = vision.height;
+    info.distortion_model = "plumb_bob";
+    info.D.resize(5);
+    for (int i = 0; i < 5; i++ ) info.D[i] = 0;
+    {
+      double fovy2 = sensor->fieldOfView() / 2.0;
+      double width  = sensor->resolutionX();
+      double height = sensor->resolutionY();
+      double minlength = std::min(width, height);
+      double fu, fv;
+      fv = fu = minlength / tan(fovy2) / 2.0;
+      double u0 = (width - 1)/2.0;
+      double v0 = (height - 1)/2.0;
+
+      info.K[0] = fu;
+      info.K[1] = 0.0;
+      info.K[2] = u0;
+      info.K[3] = 0.0;
+      info.K[4] = fv;
+      info.K[5] = v0;
+      info.K[6] = info.K[7] = 0.0; info.K[8] = 1.0;
+
+      info.P[0] = fu;
+      info.P[1] = 0.0;
+      info.P[2] = u0;
+      info.P[4] = 0.0;
+      info.P[5] = fv;
+      info.P[6] = v0;
+      info.P[3] = info.P[7] = info.P[8] = info.P[9] = info.P[11] = 0.0;
+      info.P[10] = 1.0;
+    }
+
+    for (int i = 0; i < 9; i++ ) info.R[i] = 0;
+    info.R[0] = info.R[4] = info.R[8] = 1;
+
+    publisher.publish(vision, info);
+}
+
+
 void BodyROSItem::updateRangeSensor
 (const RangeSensorPtr& sensor, const ros::Publisher& publisher)
 {
@@ -667,8 +758,11 @@ void BodyROSItem::stopPublishing()
     for (i = 0; i < visionSensorPublishers.size(); i++) {
         visionSensorPublishers[i].shutdown();
     }
-    for (i = 0; i < rangeVisionSensorPublishers.size(); i++) {
-        rangeVisionSensorPublishers[i].shutdown();
+    for (i = 0; i < rangeVisionSensorPublishers_pointcloud.size(); i++) {
+        rangeVisionSensorPublishers_pointcloud[i].shutdown();
+    }
+    for (i = 0; i < rangeVisionSensorPublishers_depthimage.size(); i++) {
+        rangeVisionSensorPublishers_depthimage[i].shutdown();
     }
     for (i = 0; i < rangeSensorPublishers.size(); i++) {
         rangeSensorPublishers[i].shutdown();
