@@ -223,8 +223,9 @@ void BodyROSItem::createSensors(BodyPtr body)
     visionSensorPublishers.reserve(visionSensors_.size());
     visionSensorSwitchServers.clear();
     visionSensorSwitchServers.reserve(visionSensors_.size());
-    for (CameraPtr sensor : visionSensors_) {
-        if (sensor->imageType() == cnoid::Camera::COLOR_IMAGE) {
+    for (Camera* sensor : visionSensors_) {
+        RangeCamera* rangecamera = dynamic_cast<RangeCamera*>(sensor);
+        if (sensor->imageType() == cnoid::Camera::COLOR_IMAGE && (!rangecamera || rangecamera->isOrganized())) {
             std::string name = sensor->name();
             std::replace(name.begin(), name.end(), '-', '_');
             const image_transport::CameraPublisher publisher
@@ -495,13 +496,12 @@ void BodyROSItem::updateRangeVisionSensor
     sensor_msgs::PointCloud2 range;
     range.header.stamp.fromSec(io->currentTime());
     range.header.frame_id = sensor->name();
-    range.width = sensor->resolutionX();
-    range.height = sensor->resolutionY();
+    range.width = sensor->constPoints().size();
+    range.height = 1;
     range.is_bigendian = false;
     range.is_dense = true;
-    range.row_step = range.point_step * range.width;
     if (sensor->imageType() == cnoid::Camera::COLOR_IMAGE) {
-        range.fields.resize(6);
+        range.fields.resize(4);
         range.fields[3].name = "rgb";
         range.fields[3].offset = 12;
         range.fields[3].count = 1;
@@ -525,6 +525,7 @@ void BodyROSItem::updateRangeVisionSensor
         range.fields.resize(3);
         range.point_step = 12;
     }
+    range.row_step = range.point_step * range.width;
     range.fields[0].name = "x";
     range.fields[0].offset = 0;
     range.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
