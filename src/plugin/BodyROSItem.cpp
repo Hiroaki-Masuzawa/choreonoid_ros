@@ -584,11 +584,10 @@ void BodyROSItem::updateRangeVisionSensor_depthimage
 
     uint16_t* dst = (uint16_t*)&(vision.data[0]);
     const std::vector<Vector3f>& points = sensor->constPoints();
-    for (int y=0;y < vision.height;y++) {
-        for (int x=0;x < vision.width;x++) {
-            int idx = y*vision.width+x;
-            float z = points[idx].z();
-            dst[idx] = (uint16_t)(z*1000);
+    for (int y = 0; y < vision.height; y++ ) {
+        for (int x = 0; x < vision.width; x++ ) {
+            int idx = y * vision.width + x;
+            dst[idx] = (uint16_t)(points[idx].z() * 1000);
         }
     }
 
