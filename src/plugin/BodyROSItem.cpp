@@ -166,6 +166,19 @@ void BodyROSItem::createSensors(BodyPtr body)
     }
 
 
+    auto itr = visionSensors_.begin();
+    while(itr != visionSensors_.end()){
+        if (Camera* sensor = *itr){
+            RangeCamera* camera = dynamic_cast<RangeCamera*>(sensor);
+            if (sensor->imageType() == cnoid::Camera::NO_IMAGE && camera->isOrganized()) {{
+                itr = visionSensors_.erase(itr);
+            }else{
+                ++itr;
+            }
+        }else{
+            ++itr;
+        }
+    }
 
     forceSensorPublishers.clear();
     forceSensorPublishers.reserve(forceSensors_.size());
